@@ -136,8 +136,8 @@ export default function MapView({ selectedEvent, onEventSelect, highlightedPois 
       mapStyle="mapbox://styles/mapbox/dark-v11"
       onLoad={handleLoad}
     >
-      {/* Event markers */}
-      {events.map((evt) => {
+      {/* Event markers — staggered bubble-enter entrance */}
+      {events.map((evt, idx) => {
         const evtColor = CATEGORY_COLORS[evt.category] ?? '#6b7280';
         const isCritical = evt.severity === 'critical';
         const isSelected = selectedEvent?.id === evt.id;
@@ -146,7 +146,12 @@ export default function MapView({ selectedEvent, onEventSelect, highlightedPois 
           <Marker key={evt.id} longitude={evt.lng} latitude={evt.lat} anchor="center">
             <button
               onClick={(e) => { e.stopPropagation(); onEventSelect(evt); }}
-              style={{ width: 36, height: 36, position: 'relative', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
+              style={{
+                width: 36, height: 36, position: 'relative', cursor: 'pointer',
+                background: 'none', border: 'none', padding: 0,
+                animation: 'bubble-enter 0.4s ease-out both',
+                animationDelay: `${idx * 60}ms`,
+              }}
               aria-label={evt.title}
             >
               {/* Outer pulse ring */}

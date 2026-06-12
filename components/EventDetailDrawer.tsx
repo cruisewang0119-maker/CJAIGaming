@@ -48,7 +48,7 @@ export default function EventDetailDrawer({ event, onClose }: EventDetailDrawerP
       />
 
       {/* Drawer */}
-      <div className="fixed right-0 top-0 h-full w-96 max-w-full bg-[#12131a] border-l border-[#1e2030] z-50 overflow-y-auto shadow-2xl">
+      <div className="fixed right-0 top-0 h-full w-96 max-w-full bg-[#12131a] border-l border-[#1e2030] z-50 overflow-y-auto shadow-2xl animate-slide-in-right">
         {/* Header */}
         <div className="sticky top-0 bg-[#12131a] border-b border-[#1e2030] px-4 py-3 flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">

@@ -1,235 +1,306 @@
-# PulseCity — Claude Code 自治执行总控Prompt（含验收标准）
-> 配套 PulseCity_VibeCoding_Guide_v2.md 使用
-> 用法：把本文件和v2手册一起放进项目根目录，启动 claude 后粘贴下方总控Prompt
+# PulseCity — iPad + GitHub + Claude Code 云端开发版
 
----
+> 替代本地Mac方案 · 全程iPad操作 · 基于 Claude Code on the web（云端会话）
+> 配套文件：PulseCity_VibeCoding_Guide_v2.md（不用改，原样提交到仓库）
 
-## 启动前人工检查清单（你做，2分钟）
+-----
 
-```bash
-cd pulsecity
-ls          # 确认两个md文件都在：
-            # PulseCity_VibeCoding_Guide_v2.md
-            # MASTER_PROMPT.md（本文件）
-cat .env.local   # 确认至少有 ANTHROPIC_API_KEY 和 NEXT_PUBLIC_MAPBOX_TOKEN
-                 # Reddit的key可以没有（会自动降级为纯mock模式）
-claude --permission-mode acceptEdits
-```
+## 这套模式和Mac本地跑的区别（先理解再动手）
 
----
+|         |Mac本地版        |iPad云端版                     |
+|---------|--------------|----------------------------|
+|代码跑在哪    |你的Mac         |Anthropic的云端虚拟机             |
+|你操作什么    |终端敲命令         |Claude App / Safari里发任务     |
+|怎么看进度    |盯终端           |手机/iPad随时打开App看，关掉也不影响它干活   |
+|产出形式     |本地文件          |自动推送到GitHub + 自动创建PR        |
+|怎么看demo效果|localhost:3000|GitHub连Vercel，每次推送自动生成可访问的网址|
+|API Key放哪|.env.local文件  |云端环境配置 + Vercel环境变量（两处）     |
 
-## 总控Prompt（整段复制进Claude Code）
+**核心逻辑**：GitHub仓库是唯一的”真相中心”。Claude云端会话从仓库克隆代码、干完活推回去开PR；Vercel盯着仓库，一有新代码就自动部署出一个网址给你看。你的iPad只负责发任务、看进度、点合并。
 
-```
-You are executing an autonomous build of PulseCity, a city intelligence demo.
+**前提条件**：Claude Pro/Max订阅（云端会话目前是research preview，Pro以上可用）。
 
-INPUTS:
-- PulseCity_VibeCoding_Guide_v2.md — the full implementation spec
-- MASTER_PROMPT.md — this file, containing phase definitions and acceptance criteria
+-----
 
-OPERATING RULES (read carefully, these override your defaults):
-1. NEVER ask me questions. Every decision point is covered by the guide;
-   if genuinely ambiguous, choose the simpler option and log it in DECISIONS.md.
-2. Skip ALL v0.dev sections in the guide. Build the UI yourself following
-   the design system in the guide (dark theme #0a0a0f, category colors,
-   Inter font, flat design, Bloomberg-Terminal-meets-Citizen aesthetic).
-3. Execute phases STRICTLY in order. A phase is complete ONLY when ALL its
-   acceptance criteria pass. Do not start the next phase early.
-4. After each phase: run the verification commands, then append a status
-   line to PROGRESS.md: "[timestamp] Phase N: PASS/FAIL — notes".
-5. On failure: attempt fixes up to 3 times per phase. If still failing
-   after 3 attempts, apply the phase's FALLBACK rule, log it, and continue.
-   Never stop the whole run because of one phase.
-6. If .env.local is missing REDDIT_CLIENT_ID: skip Phase 5 entirely,
-   set the events API to mock-only mode, log this in DECISIONS.md.
-7. Keep a running DECISIONS.md documenting every judgment call you made.
-8. Final deliverable: working `npm run dev`, plus a FINAL_REPORT.md.
+## 第一阶段：建GitHub仓库并放入文件（iPad Safari操作，15分钟）
 
-Now read both md files fully, then begin Phase 0.
+### 第1步：注册/登录GitHub
 
-================ PHASE DEFINITIONS ================
+Safari打开 <https://github.com> ，没账号就注册一个。
 
---- PHASE 0: Environment & Scaffold ---
-Tasks: Guide's Claude Code Prompt 1 (init Next.js 14 + deps + structure
-+ CLAUDE.md creation as specified in guide section 1).
-Acceptance criteria:
-  AC-0.1: `npm run build` exits 0 on the empty scaffold
-  AC-0.2: CLAUDE.md exists at project root with the content from guide section 1
-  AC-0.3: 'mapbox-gl/dist/mapbox-gl.css' is imported in app/layout.tsx
-  AC-0.4: .env.example exists listing all 4 keys
-Verification: npm run build && test -f CLAUDE.md && grep -q "mapbox-gl.*css" app/layout.tsx
-Fallback: none — this phase must pass; if create-next-app fails 3 times,
-report the raw error in PROGRESS.md and STOP (only phase allowed to stop the run).
+### 第2步：创建仓库
 
---- PHASE 1: Types & Mock Data ---
-Tasks: Guide Prompt 2 (lib/types.ts + lib/mock-data.ts).
-Acceptance criteria:
-  AC-1.1: `npx tsc --noEmit` exits 0
-  AC-1.2: zero occurrences of `: any` in lib/types.ts
-  AC-1.3: SEATTLE_POIS has exactly 30 entries; SEATTLE_EVENTS has 12;
-          exactly 3 events have status 'predicted'
-  AC-1.4: every lat is between 47.5–47.75 and every lng between -122.45–-122.2
-          (write a quick node script to assert this, run it, then delete it)
-  AC-1.5: all createdAt timestamps parse as valid ISO dates within last 24h
-Verification: tsc check + the assertion script
-Fallback: if coordinate validation keeps failing, regenerate coordinates
-from a hardcoded list of 30 verified Seattle locations.
+1. 右上角 “+” → New repository
+1. 名字填 `pulsecity`
+1. 选 **Private**（私有）
+1. 勾上 “Add a README file”
+1. 点 Create repository
 
---- PHASE 2: City Tools + Chat API (THE CORE) ---
-Tasks: Guide Prompts 3 + 4 (lib/city-tools.ts, app/api/chat/route.ts,
-lib/chat-client.ts). Model: claude-sonnet-4-6, SSE streaming, agentic
-tool-use loop capped at 5 iterations.
-Acceptance criteria:
-  AC-2.1: `npm run build` exits 0
-  AC-2.2: write scripts/test-chat.mjs that POSTs
-          {"messages":[{"role":"user","content":"What's happening near Capitol Hill?"}]}
-          to localhost:3000/api/chat and parses the SSE stream.
-          Assert ALL of: at least one 'tool_call' event received,
-          at least one 'text_delta' event received,
-          exactly one 'done' event received, no 'error' events.
-          (Start dev server in background for the test, kill it after.)
-  AC-2.3: same script with query "Find me dinner not near any events"
-          must trigger a query_poi tool call with exclude_near_events
-          visible in server logs, and 'done' event must contain at least
-          one referencedPoi
-  AC-2.4: executeTool returns compact JSON — verify search_events output
-          for the full event list is under 2000 characters
-  AC-2.5: grep confirms ANTHROPIC_API_KEY appears only in app/api/** and lib
-          files imported solely by API routes, never in any 'use client' file
-Verification: build + run scripts/test-chat.mjs twice (two queries)
-Fallback: if SSE streaming fails persistently, downgrade to non-streamed
-JSON responses (single response object), keep the tool_call status events
-as a synthetic pre-response payload, and log the downgrade. The tool-use
-loop itself must NOT be cut — it is the demo's core.
+### 第3步：上传两个md文件
 
---- PHASE 3: UI Components (replacing v0) ---
-Tasks: Build MapView, EventFeed, ChatPanel, EventDetailDrawer,
-ToolCallIndicator, PredictionCard per guide sections 2 (visual specs)
-and 4.1 (wiring spec). Plus app/api/events/route.ts + lib/geo-utils.ts
-(guide Prompt 6) and lib/prediction-engine.ts (guide Prompt 7).
-Acceptance criteria:
-  AC-3.1: `npm run build` exits 0
-  AC-3.2: /api/events returns valid JSON array with >= 12 events,
-          each having a distanceMiles field when lat/lng params provided
-  AC-3.3: app/page.tsx renders MapView + EventFeed + ChatPanel in the
-          60/40 split layout; map components have 'use client'
-  AC-3.4: ChatPanel uses streamCityChat callbacks; ToolCallIndicator
-          appears in the component tree wired to onToolCall/onToolDone
-  AC-3.5: predicted events render with dashed border class and a
-          PREDICTED badge (grep the component for both)
-  AC-3.6: clicking a POI chip in chat calls the highlight callback that
-          reaches MapView's highlightedPois prop (verify the prop chain
-          exists in page.tsx by reading the code)
-Verification: build + curl /api/events + code inspection of prop wiring
-Fallback: if Mapbox heatmap layer causes issues, ship markers-only and
-log it. If react-map-gl version conflicts arise, pin to a known-good
-version rather than fighting the latest.
+1. 仓库页面点 “Add file” → “Upload files”
+1. 上传 `PulseCity_VibeCoding_Guide_v2.md` 和本文件
+1. 底部点 Commit changes
 
---- PHASE 4: Map-Chat Integration Test ---
-Tasks: end-to-end wiring validation and fixes.
-Acceptance criteria:
-  AC-4.1: extend scripts/test-chat.mjs — the 'done' event's
-          referencedPois entries must each have valid lat/lng that
-          exist in SEATTLE_POIS
-  AC-4.2: selectedEvent state flows: EventFeed click → page state →
-          MapView impact-radius circle AND EventDetailDrawer open
-          (verify by code reading; document the chain in PROGRESS.md)
-  AC-4.3: dev server runs 60 seconds with zero unhandled errors in
-          console while test script fires 3 chat queries
-Verification: run the extended script against dev server
-Fallback: none needed — fix until passing or 3 attempts then log
-remaining issues as KNOWN_ISSUES section in FINAL_REPORT.md.
+### 第4步：创建 .gitignore（防止把密钥提交进仓库）
 
---- PHASE 5: Reddit + Haiku Classification (SKIP if no Reddit creds) ---
-Tasks: Guide Prompt 5 (reddit-client.ts, classify-events.ts using
-claude-haiku-4-5 batched classification, /api/reddit route).
-Acceptance criteria:
-  AC-5.1: `npm run build` exits 0
-  AC-5.2: /api/reddit returns within 5 seconds and ALWAYS includes the
-          12 mock events even if Reddit fetch fails (test by temporarily
-          setting an invalid Reddit credential and confirming graceful
-          fallback — then restore)
-  AC-5.3: classify-events makes exactly ONE Anthropic call per batch
-          (not per post) — verify by code inspection
-  AC-5.4: events with unmatched location_mention are dropped, never
-          given fake coordinates (code inspection)
-Verification: build + timed curl of /api/reddit + fault-injection test
-Fallback: on persistent Reddit OAuth failure, hard-disable the Reddit
-path (return mock only), log it. The demo must never depend on Reddit.
-
---- PHASE 6: Polish — Animations, Realtime Sim, Responsive ---
-Tasks: Guide v1 Prompts 10, 11, 13 (referenced from v2 sections 4.2/4.3):
-pulse-ring keyframes, fade-in-up, typing dots, drawer transitions,
-useRealtimeEvents/useCityPulse/useBreakingAlert hooks, tablet/mobile
-breakpoints.
-Acceptance criteria:
-  AC-6.1: `npm run build` exits 0
-  AC-6.2: globals.css (or animations.css) contains keyframes:
-          pulse-ring, fade-in-up, typing-dot (grep)
-  AC-6.3: useRealtimeEvents hook exists and is consumed in page.tsx
-  AC-6.4: map container has explicit height at every breakpoint
-          (grep for h-[ or height in the responsive classes)
-Verification: build + grep checks
-Fallback: responsive layout is the FIRST thing to cut if over budget —
-desktop-only is acceptable for the demo. Animations on map bubbles and
-the ToolCallIndicator are NOT cuttable.
-
---- PHASE 7: Final Build + Report ---
-Tasks: guide Prompt 12 checks + write FINAL_REPORT.md.
-Acceptance criteria:
-  AC-7.1: clean `npm run build` from scratch (rm -rf .next first) exits 0
-  AC-7.2: `npm run dev` starts and serves the page (curl localhost:3000
-          returns 200 with "PulseCity" in the HTML)
-  AC-7.3: FINAL_REPORT.md exists with sections:
-          - What was built (per phase, one line each)
-          - DECISIONS.md summary (top 5 judgment calls)
-          - KNOWN_ISSUES (anything that hit fallback rules)
-          - What needs human attention (visual polish items you could
-            not self-evaluate: animation timing, color feel, demo wow)
-          - Exact commands to run the demo
-Verification: the three checks above
-Fallback: none — report honestly whatever state the project is in.
-
-================ END PHASE DEFINITIONS ================
-
-Begin now. Read both md files, then start Phase 0.
-```
-
----
-
-## 跑完之后你要亲自做的事（不可委托）
-
-按优先级：
-
-1. **跑一遍演示脚本的4个问题**（手册v2第6节）——看回答有没有"城市感"，
-   没有的话调 system prompt 的 personality 部分，这是人肉判断
-2. **盯着地图看30秒**——气泡脉冲节奏、热力图浓淡，"够不够惊艳"只有你能判断
-3. **读 FINAL_REPORT.md 的 KNOWN_ISSUES**——每条fallback降级都在这里，
-   决定哪些要救回来（比如SSE被降级了就值得救）
-4. **手机/iPad开一次**——如果Phase 6砍了响应式，至少确认桌面端没烂
-
----
-
-## Hermes 封装版（可选，路径二用）
-
-如果要包进Hermes跑无人值守+飞书汇报，给Orchestrator的任务拆分：
+1. Add file → Create new file
+1. 文件名输入 `.gitignore`
+1. 内容粘贴：
 
 ```
-Task 1: cd ~/pulsecity && claude -p "$(cat MASTER_PROMPT.md 中的总控Prompt，
-        但把PHASE范围限定为 Phase 0-2)" --permission-mode bypassPermissions
-        成功条件: PROGRESS.md 最后一行包含 "Phase 2: PASS"
-        飞书通知: "核心对话API完成 ✅" / 失败则推送PROGRESS.md最后10行
-
-Task 2: 同上，Phase 3-4
-        飞书通知: "三屏联动完成 ✅"
-
-Task 3: 同上，Phase 5-7
-        飞书通知: "构建完成，FINAL_REPORT.md 已生成" + 报告全文推送
+node_modules/
+.next/
+.env
+.env.local
+.env*.local
+.vercel
 ```
 
-每个Task之间Hermes检查 `PROGRESS.md`，FAIL就暂停等你飞书回复指令。
-分3段跑的好处：单次claude -p的上下文不会爆，失败重跑代价小。
+1. Commit changes
 
----
+-----
 
-*总控Prompt结束 — 预计无人值守耗时2-4小时（取决于fallback触发次数）*
+## 第二阶段：连接 Claude Code 云端（10分钟）
+
+### 第5步：连接GitHub
+
+1. iPad上打开 Claude App（或Safari访问 claude.ai/code）
+1. 进入 Code 功能区
+1. 按引导授权 Claude GitHub App，安装到你的 `pulsecity` 仓库
+1. 授权完成后，新建任务时就能选中这个仓库了
+
+### 第6步：配置云端环境（关键步骤，决定成败）
+
+新建会话时找到环境选择器（云朵图标）→ Add environment，配置三项：
+
+**① 名称**：`pulsecity-env`
+
+**② Network access（网络访问）**：选 **Custom**，勾上 “Also include default list of common package managers”，然后在 Allowed domains 里逐行添加：
+
+```
+api.anthropic.com
+api.mapbox.com
+events.mapbox.com
+oauth.reddit.com
+www.reddit.com
+```
+
+（不加 api.anthropic.com 的话，验收测试里的对话API自测会全部失败）
+
+**③ Environment variables（环境变量）**：按 .env 格式填入，等号后直接贴key，不要加引号：
+
+```
+ANTHROPIC_API_KEY=你的key
+NEXT_PUBLIC_MAPBOX_TOKEN=你的token
+REDDIT_CLIENT_ID=
+REDDIT_CLIENT_SECRET=
+```
+
+> ⚠️ 注意：云端环境变量对所有能编辑这个环境的人可见（目前没有专门的加密保险库）。个人项目无所谓，但别用公司的高权限key。
+
+-----
+
+## 第三阶段：分三个会话执行（核心）
+
+> 云端模式下不要用一个超长会话跑完全部——拆成3个会话，每个会话产出一个PR，
+> 你在iPad上审一眼、点合并，再开下一个。失败重跑的代价也小。
+
+### 第7步：会话A — 数据层 + 对话核心（Phase 0-2）
+
+新建云端会话，选 `pulsecity` 仓库 + `pulsecity-env` 环境，粘贴：
+
+```
+Read PulseCity_VibeCoding_Guide_v2.md fully before starting.
+
+MISSION: Implement Phases 0-2 of the PulseCity build (scaffold, types,
+mock data, city tools, chat API with tool use + SSE streaming).
+
+CLOUD-SPECIFIC RULES:
+1. This repo already contains md files and a .gitignore — initialize
+   Next.js 14 IN PLACE around them (move conflicting files temporarily
+   if create-next-app refuses, then restore).
+2. Do NOT create .env.local — environment variables are provided by the
+   cloud environment. Code must read process.env directly. DO create
+   .env.example documenting the 4 required keys.
+3. Create CLAUDE.md at repo root exactly as specified in guide section 1
+   and COMMIT it — future sessions depend on it.
+4. Never ask me questions. Ambiguous calls → choose simpler, log in
+   DECISIONS.md.
+
+TASKS (from the guide):
+- Guide Prompt 1: scaffold + deps (mapbox-gl, react-map-gl, swr, zustand,
+  date-fns, lucide-react, @anthropic-ai/sdk)
+- Guide Prompt 2: lib/types.ts + lib/mock-data.ts
+- Guide Prompt 3: lib/city-tools.ts (4 tools: search_events, query_poi,
+  get_predictions, get_area_status)
+- Guide Prompt 4: app/api/chat/route.ts (claude-sonnet-4-6, agentic tool
+  loop capped at 5 iterations, SSE streaming) + lib/chat-client.ts
+
+ACCEPTANCE CRITERIA (all must pass before you finish):
+AC-1: npm run build exits 0
+AC-2: npx tsc --noEmit exits 0; zero `: any` in lib/types.ts
+AC-3: SEATTLE_POIS has 30 entries, SEATTLE_EVENTS has 12 (3 predicted);
+      all coords within lat 47.5-47.75, lng -122.45 to -122.2
+      (write a node assertion script, run it, keep it in scripts/)
+AC-4: write scripts/test-chat.mjs — start `npm run dev` in background,
+      POST a chat message about Capitol Hill to /api/chat, parse SSE:
+      assert >=1 tool_call event, >=1 text_delta event, exactly 1 done
+      event, 0 error events. Then test "Find me dinner not near any
+      events" — assert referencedPois is non-empty. Kill dev server after.
+AC-5: ANTHROPIC_API_KEY referenced only in server-side files
+      (grep check: never in any 'use client' file)
+
+ON FAILURE: 3 fix attempts per criterion, then apply guide fallback
+rules, log in DECISIONS.md, continue.
+
+DELIVERABLE: commit everything including PROGRESS.md (one status line
+per phase) and DECISIONS.md. Push and create a PR titled
+"Phase 0-2: Data layer + conversational core". PR description must
+include: test results from scripts/test-chat.mjs, all decisions made,
+any fallbacks triggered.
+```
+
+发出去后你就可以放下iPad了。会话在云端持续运行，随时打开App看实时进度，还能中途发消息纠偏。
+
+**完成后**：GitHub App会通知你有新PR。打开PR → 看描述里的测试结果 → 没问题就点 **Merge pull request**。
+
+### 第8步：会话B — UI + 三屏联动（Phase 3-4）
+
+合并PR A之后，新建会话（同仓库同环境），粘贴：
+
+```
+Read CLAUDE.md and PulseCity_VibeCoding_Guide_v2.md fully. Phases 0-2
+are complete and merged — verify by running npm install && npm run build
+first. If build fails on main, fix it before proceeding.
+
+MISSION: Implement Phases 3-4 (all UI components + integration).
+
+TASKS:
+- Build the UI yourself following the design specs in guide section 2
+  (skip all v0.dev references): MapView, EventFeed, ChatPanel,
+  EventDetailDrawer, ToolCallIndicator, PredictionCard
+- Guide Prompt 6: app/api/events/route.ts + lib/geo-utils.ts
+- Guide Prompt 7: lib/prediction-engine.ts
+- Guide section 4.1 wiring: 60/40 split layout, map markers with pulsing
+  rings, chat streaming UI with tool-call indicator, POI chips in chat
+  that highlight + flyTo on the map, selectedEvent → impact radius +
+  detail drawer
+
+ACCEPTANCE CRITERIA:
+AC-1: npm run build exits 0
+AC-2: curl /api/events returns >=12 events with distanceMiles when
+      lat/lng provided
+AC-3: extend scripts/test-chat.mjs — referencedPois entries must have
+      lat/lng matching entries in SEATTLE_POIS
+AC-4: predicted events render dashed border + PREDICTED badge (grep)
+AC-5: the prop chain chat→page→map highlightedPois exists and the
+      event chain feed→page→drawer+map exists (verify by reading
+      page.tsx, document both chains in PROGRESS.md)
+AC-6: dev server runs 60s with 3 chat queries fired, zero unhandled
+      errors
+
+NEVER ask questions. Same fallback policy as before (guide rules).
+Mapbox heatmap layer issues → ship markers-only, log it.
+
+DELIVERABLE: update PROGRESS.md + DECISIONS.md, push, PR titled
+"Phase 3-4: UI and integration" with screenshots if possible
+(describe the rendered layout in the PR body regardless).
+```
+
+### 第9步：会话C — 数据增强 + 打磨（Phase 5-7）
+
+合并PR B之后，最后一个会话：
+
+```
+Read CLAUDE.md and PulseCity_VibeCoding_Guide_v2.md. Phases 0-4 merged.
+Verify npm run build passes on main first.
+
+MISSION: Phases 5-7 (Reddit + Haiku classification, polish, final report).
+
+TASKS:
+- Guide Prompt 5: reddit-client.ts + classify-events.ts
+  (claude-haiku-4-5, ONE batched call per fetch) + /api/reddit route.
+  If REDDIT_CLIENT_ID env var is empty: implement the module but
+  hard-wire mock-only mode, log it.
+- Animations: pulse-ring, fade-in-up, typing-dot keyframes; drawer
+  slide transition; staggered map bubble entrance
+- Realtime simulation hooks: useRealtimeEvents, useCityPulse,
+  useBreakingAlert (guide v1 Prompt 13 spec, referenced in v2 §4.3)
+- Responsive: desktop-first; tablet/mobile per guide §4.2 — this is
+  the FIRST thing to cut if struggling
+- vercel.json: maxDuration 60 for /api/chat, CORS headers
+- README.md: env vars table + deploy steps
+
+ACCEPTANCE CRITERIA:
+AC-1: clean build (rm -rf .next first) exits 0
+AC-2: /api/reddit responds within 5s and ALWAYS includes the 12 mock
+      events (fault-injection test: invalid creds → graceful fallback)
+AC-3: keyframes present in CSS (grep pulse-ring, fade-in-up, typing-dot)
+AC-4: useRealtimeEvents consumed in page.tsx
+AC-5: FINAL_REPORT.md exists with: per-phase summary, top decisions,
+      KNOWN_ISSUES, "needs human attention" list (visual polish items),
+      and exact local-run + Vercel deploy instructions
+
+DELIVERABLE: push, PR titled "Phase 5-7: Live data + polish + report".
+Include FINAL_REPORT.md content in the PR description.
+```
+
+-----
+
+## 第四阶段：Vercel 自动部署（iPad看demo的方式，15分钟）
+
+没有localhost，所以用Vercel把仓库变成一个真实网址。
+
+### 第10步：连接Vercel
+
+1. Safari打开 <https://vercel.com> ，用 **Continue with GitHub** 登录
+1. Add New → Project → 找到 `pulsecity` 仓库 → Import
+1. Framework 自动识别为 Next.js，不用改
+1. 展开 **Environment Variables**，添加：
+- `ANTHROPIC_API_KEY` = 你的key
+- `NEXT_PUBLIC_MAPBOX_TOKEN` = 你的token
+- Reddit两个key有就填，没有留空
+1. 点 Deploy
+
+### 第11步：看demo
+
+部署完成后Vercel给你一个网址（类似 `pulsecity-xxx.vercel.app`），iPad Safari直接打开——这就是你的demo，可以发给任何人看。
+
+之后每次合并PR，Vercel自动重新部署，网址内容自动更新。每个PR还会有独立的预览网址（PR页面里Vercel机器人会留言），合并前就能先看效果。
+
+-----
+
+## 日常工作流总结（跑通一次后的肌肉记忆）
+
+```
+iPad发任务 → 云端会话干活（你该干嘛干嘛）→ App通知PR好了
+→ GitHub看PR描述里的测试结果 → 点Merge
+→ Vercel自动部署 → Safari打开网址验收
+→ 不满意？新开会话："Fix XXX on the latest main" → 又一个PR
+```
+
+后续所有迭代都是这个循环。改个动效、调个prompt、加个功能，全是”发任务→等PR→合并→刷新网页”。
+
+-----
+
+## 排错速查（云端版特有问题）
+
+|问题               |原因和解决                                                     |
+|-----------------|----------------------------------------------------------|
+|会话里npm install失败 |环境网络选了None，改成Custom并勾上默认包管理器列表                            |
+|test-chat.mjs全部超时|Allowed domains漏了 api.anthropic.com                       |
+|会话说找不到环境变量       |检查环境配置里的变量格式：不要引号、不要空格、一行一个                               |
+|Vercel部署成功但页面报错  |Vercel的环境变量没填（云端环境和Vercel是两套，要分别填）                        |
+|PR里代码冲突          |按顺序跑会话、跑完及时合并就不会冲突；冲突了就新开会话让它”resolve conflicts with main”|
+|想中途改方向           |云端会话支持实时介入，直接在会话里发消息纠偏                                    |
+
+-----
+
+## 和你Hermes体系的衔接（彩蛋）
+
+这套云端模式天然适合接进你的自动化体系：GitHub有Webhook，PR创建/合并/部署成功都能触发通知。在你的Mac mini上挂一个轻量服务监听Webhook → 转发到飞书，就实现了”iPad发任务，飞书收进度”，连Claude App都不用一直开着。这个可以等demo跑通后作为下一个小项目。
+
+-----
+
+*云端工作流文档结束*

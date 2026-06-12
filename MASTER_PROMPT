@@ -1,0 +1,235 @@
+# PulseCity — Claude Code 自治执行总控Prompt（含验收标准）
+> 配套 PulseCity_VibeCoding_Guide_v2.md 使用
+> 用法：把本文件和v2手册一起放进项目根目录，启动 claude 后粘贴下方总控Prompt
+
+---
+
+## 启动前人工检查清单（你做，2分钟）
+
+```bash
+cd pulsecity
+ls          # 确认两个md文件都在：
+            # PulseCity_VibeCoding_Guide_v2.md
+            # MASTER_PROMPT.md（本文件）
+cat .env.local   # 确认至少有 ANTHROPIC_API_KEY 和 NEXT_PUBLIC_MAPBOX_TOKEN
+                 # Reddit的key可以没有（会自动降级为纯mock模式）
+claude --permission-mode acceptEdits
+```
+
+---
+
+## 总控Prompt（整段复制进Claude Code）
+
+```
+You are executing an autonomous build of PulseCity, a city intelligence demo.
+
+INPUTS:
+- PulseCity_VibeCoding_Guide_v2.md — the full implementation spec
+- MASTER_PROMPT.md — this file, containing phase definitions and acceptance criteria
+
+OPERATING RULES (read carefully, these override your defaults):
+1. NEVER ask me questions. Every decision point is covered by the guide;
+   if genuinely ambiguous, choose the simpler option and log it in DECISIONS.md.
+2. Skip ALL v0.dev sections in the guide. Build the UI yourself following
+   the design system in the guide (dark theme #0a0a0f, category colors,
+   Inter font, flat design, Bloomberg-Terminal-meets-Citizen aesthetic).
+3. Execute phases STRICTLY in order. A phase is complete ONLY when ALL its
+   acceptance criteria pass. Do not start the next phase early.
+4. After each phase: run the verification commands, then append a status
+   line to PROGRESS.md: "[timestamp] Phase N: PASS/FAIL — notes".
+5. On failure: attempt fixes up to 3 times per phase. If still failing
+   after 3 attempts, apply the phase's FALLBACK rule, log it, and continue.
+   Never stop the whole run because of one phase.
+6. If .env.local is missing REDDIT_CLIENT_ID: skip Phase 5 entirely,
+   set the events API to mock-only mode, log this in DECISIONS.md.
+7. Keep a running DECISIONS.md documenting every judgment call you made.
+8. Final deliverable: working `npm run dev`, plus a FINAL_REPORT.md.
+
+Now read both md files fully, then begin Phase 0.
+
+================ PHASE DEFINITIONS ================
+
+--- PHASE 0: Environment & Scaffold ---
+Tasks: Guide's Claude Code Prompt 1 (init Next.js 14 + deps + structure
++ CLAUDE.md creation as specified in guide section 1).
+Acceptance criteria:
+  AC-0.1: `npm run build` exits 0 on the empty scaffold
+  AC-0.2: CLAUDE.md exists at project root with the content from guide section 1
+  AC-0.3: 'mapbox-gl/dist/mapbox-gl.css' is imported in app/layout.tsx
+  AC-0.4: .env.example exists listing all 4 keys
+Verification: npm run build && test -f CLAUDE.md && grep -q "mapbox-gl.*css" app/layout.tsx
+Fallback: none — this phase must pass; if create-next-app fails 3 times,
+report the raw error in PROGRESS.md and STOP (only phase allowed to stop the run).
+
+--- PHASE 1: Types & Mock Data ---
+Tasks: Guide Prompt 2 (lib/types.ts + lib/mock-data.ts).
+Acceptance criteria:
+  AC-1.1: `npx tsc --noEmit` exits 0
+  AC-1.2: zero occurrences of `: any` in lib/types.ts
+  AC-1.3: SEATTLE_POIS has exactly 30 entries; SEATTLE_EVENTS has 12;
+          exactly 3 events have status 'predicted'
+  AC-1.4: every lat is between 47.5–47.75 and every lng between -122.45–-122.2
+          (write a quick node script to assert this, run it, then delete it)
+  AC-1.5: all createdAt timestamps parse as valid ISO dates within last 24h
+Verification: tsc check + the assertion script
+Fallback: if coordinate validation keeps failing, regenerate coordinates
+from a hardcoded list of 30 verified Seattle locations.
+
+--- PHASE 2: City Tools + Chat API (THE CORE) ---
+Tasks: Guide Prompts 3 + 4 (lib/city-tools.ts, app/api/chat/route.ts,
+lib/chat-client.ts). Model: claude-sonnet-4-6, SSE streaming, agentic
+tool-use loop capped at 5 iterations.
+Acceptance criteria:
+  AC-2.1: `npm run build` exits 0
+  AC-2.2: write scripts/test-chat.mjs that POSTs
+          {"messages":[{"role":"user","content":"What's happening near Capitol Hill?"}]}
+          to localhost:3000/api/chat and parses the SSE stream.
+          Assert ALL of: at least one 'tool_call' event received,
+          at least one 'text_delta' event received,
+          exactly one 'done' event received, no 'error' events.
+          (Start dev server in background for the test, kill it after.)
+  AC-2.3: same script with query "Find me dinner not near any events"
+          must trigger a query_poi tool call with exclude_near_events
+          visible in server logs, and 'done' event must contain at least
+          one referencedPoi
+  AC-2.4: executeTool returns compact JSON — verify search_events output
+          for the full event list is under 2000 characters
+  AC-2.5: grep confirms ANTHROPIC_API_KEY appears only in app/api/** and lib
+          files imported solely by API routes, never in any 'use client' file
+Verification: build + run scripts/test-chat.mjs twice (two queries)
+Fallback: if SSE streaming fails persistently, downgrade to non-streamed
+JSON responses (single response object), keep the tool_call status events
+as a synthetic pre-response payload, and log the downgrade. The tool-use
+loop itself must NOT be cut — it is the demo's core.
+
+--- PHASE 3: UI Components (replacing v0) ---
+Tasks: Build MapView, EventFeed, ChatPanel, EventDetailDrawer,
+ToolCallIndicator, PredictionCard per guide sections 2 (visual specs)
+and 4.1 (wiring spec). Plus app/api/events/route.ts + lib/geo-utils.ts
+(guide Prompt 6) and lib/prediction-engine.ts (guide Prompt 7).
+Acceptance criteria:
+  AC-3.1: `npm run build` exits 0
+  AC-3.2: /api/events returns valid JSON array with >= 12 events,
+          each having a distanceMiles field when lat/lng params provided
+  AC-3.3: app/page.tsx renders MapView + EventFeed + ChatPanel in the
+          60/40 split layout; map components have 'use client'
+  AC-3.4: ChatPanel uses streamCityChat callbacks; ToolCallIndicator
+          appears in the component tree wired to onToolCall/onToolDone
+  AC-3.5: predicted events render with dashed border class and a
+          PREDICTED badge (grep the component for both)
+  AC-3.6: clicking a POI chip in chat calls the highlight callback that
+          reaches MapView's highlightedPois prop (verify the prop chain
+          exists in page.tsx by reading the code)
+Verification: build + curl /api/events + code inspection of prop wiring
+Fallback: if Mapbox heatmap layer causes issues, ship markers-only and
+log it. If react-map-gl version conflicts arise, pin to a known-good
+version rather than fighting the latest.
+
+--- PHASE 4: Map-Chat Integration Test ---
+Tasks: end-to-end wiring validation and fixes.
+Acceptance criteria:
+  AC-4.1: extend scripts/test-chat.mjs — the 'done' event's
+          referencedPois entries must each have valid lat/lng that
+          exist in SEATTLE_POIS
+  AC-4.2: selectedEvent state flows: EventFeed click → page state →
+          MapView impact-radius circle AND EventDetailDrawer open
+          (verify by code reading; document the chain in PROGRESS.md)
+  AC-4.3: dev server runs 60 seconds with zero unhandled errors in
+          console while test script fires 3 chat queries
+Verification: run the extended script against dev server
+Fallback: none needed — fix until passing or 3 attempts then log
+remaining issues as KNOWN_ISSUES section in FINAL_REPORT.md.
+
+--- PHASE 5: Reddit + Haiku Classification (SKIP if no Reddit creds) ---
+Tasks: Guide Prompt 5 (reddit-client.ts, classify-events.ts using
+claude-haiku-4-5 batched classification, /api/reddit route).
+Acceptance criteria:
+  AC-5.1: `npm run build` exits 0
+  AC-5.2: /api/reddit returns within 5 seconds and ALWAYS includes the
+          12 mock events even if Reddit fetch fails (test by temporarily
+          setting an invalid Reddit credential and confirming graceful
+          fallback — then restore)
+  AC-5.3: classify-events makes exactly ONE Anthropic call per batch
+          (not per post) — verify by code inspection
+  AC-5.4: events with unmatched location_mention are dropped, never
+          given fake coordinates (code inspection)
+Verification: build + timed curl of /api/reddit + fault-injection test
+Fallback: on persistent Reddit OAuth failure, hard-disable the Reddit
+path (return mock only), log it. The demo must never depend on Reddit.
+
+--- PHASE 6: Polish — Animations, Realtime Sim, Responsive ---
+Tasks: Guide v1 Prompts 10, 11, 13 (referenced from v2 sections 4.2/4.3):
+pulse-ring keyframes, fade-in-up, typing dots, drawer transitions,
+useRealtimeEvents/useCityPulse/useBreakingAlert hooks, tablet/mobile
+breakpoints.
+Acceptance criteria:
+  AC-6.1: `npm run build` exits 0
+  AC-6.2: globals.css (or animations.css) contains keyframes:
+          pulse-ring, fade-in-up, typing-dot (grep)
+  AC-6.3: useRealtimeEvents hook exists and is consumed in page.tsx
+  AC-6.4: map container has explicit height at every breakpoint
+          (grep for h-[ or height in the responsive classes)
+Verification: build + grep checks
+Fallback: responsive layout is the FIRST thing to cut if over budget —
+desktop-only is acceptable for the demo. Animations on map bubbles and
+the ToolCallIndicator are NOT cuttable.
+
+--- PHASE 7: Final Build + Report ---
+Tasks: guide Prompt 12 checks + write FINAL_REPORT.md.
+Acceptance criteria:
+  AC-7.1: clean `npm run build` from scratch (rm -rf .next first) exits 0
+  AC-7.2: `npm run dev` starts and serves the page (curl localhost:3000
+          returns 200 with "PulseCity" in the HTML)
+  AC-7.3: FINAL_REPORT.md exists with sections:
+          - What was built (per phase, one line each)
+          - DECISIONS.md summary (top 5 judgment calls)
+          - KNOWN_ISSUES (anything that hit fallback rules)
+          - What needs human attention (visual polish items you could
+            not self-evaluate: animation timing, color feel, demo wow)
+          - Exact commands to run the demo
+Verification: the three checks above
+Fallback: none — report honestly whatever state the project is in.
+
+================ END PHASE DEFINITIONS ================
+
+Begin now. Read both md files, then start Phase 0.
+```
+
+---
+
+## 跑完之后你要亲自做的事（不可委托）
+
+按优先级：
+
+1. **跑一遍演示脚本的4个问题**（手册v2第6节）——看回答有没有"城市感"，
+   没有的话调 system prompt 的 personality 部分，这是人肉判断
+2. **盯着地图看30秒**——气泡脉冲节奏、热力图浓淡，"够不够惊艳"只有你能判断
+3. **读 FINAL_REPORT.md 的 KNOWN_ISSUES**——每条fallback降级都在这里，
+   决定哪些要救回来（比如SSE被降级了就值得救）
+4. **手机/iPad开一次**——如果Phase 6砍了响应式，至少确认桌面端没烂
+
+---
+
+## Hermes 封装版（可选，路径二用）
+
+如果要包进Hermes跑无人值守+飞书汇报，给Orchestrator的任务拆分：
+
+```
+Task 1: cd ~/pulsecity && claude -p "$(cat MASTER_PROMPT.md 中的总控Prompt，
+        但把PHASE范围限定为 Phase 0-2)" --permission-mode bypassPermissions
+        成功条件: PROGRESS.md 最后一行包含 "Phase 2: PASS"
+        飞书通知: "核心对话API完成 ✅" / 失败则推送PROGRESS.md最后10行
+
+Task 2: 同上，Phase 3-4
+        飞书通知: "三屏联动完成 ✅"
+
+Task 3: 同上，Phase 5-7
+        飞书通知: "构建完成，FINAL_REPORT.md 已生成" + 报告全文推送
+```
+
+每个Task之间Hermes检查 `PROGRESS.md`，FAIL就暂停等你飞书回复指令。
+分3段跑的好处：单次claude -p的上下文不会爆，失败重跑代价小。
+
+---
+
+*总控Prompt结束 — 预计无人值守耗时2-4小时（取决于fallback触发次数）*

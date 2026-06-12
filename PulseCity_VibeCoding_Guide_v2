@@ -1,0 +1,523 @@
+# PulseCity — Vibe Coding 完整实施手册 v2.0
+> 高保真Demo原型 · 1-2天完成 · v0.dev + Claude Code
+> v2 核心升级：Tool Use架构、流式响应、AI事件分类、CLAUDE.md工程化
+
+---
+
+## v2 相对 v1 的关键变化（先读这个）
+
+| # | 变化 | 为什么 |
+|---|------|--------|
+| 1 | 对话API改用 **Tool Use 架构** | v1把全部事件+POI的JSON塞进system prompt，数据一多就爆token、回答质量下降。v2让Claude主动调用 `search_events` / `query_poi` 等工具查询，演示时还能展示"AI正在查询城市数据库"的过程动画——科技感直接拉满 |
+| 2 | 对话响应改为 **流式（streaming）** | v1是等完整回复再显示，demo时会有3-5秒尴尬空白。v2逐字流出，体验质变 |
+| 3 | Reddit事件分类从关键词匹配改为 **Claude Haiku分类** | 关键词匹配的分类准确率太差，demo时一条错误分类就穿帮。Haiku 4.5每条成本不到$0.001，质量天差地别 |
+| 4 | 新增 **CLAUDE.md 项目上下文文件** | Claude Code的最佳实践：项目根目录放一份CLAUDE.md，之后所有prompt都不用重复解释项目背景，生成代码一致性大幅提升 |
+| 5 | 模型更新为 **claude-sonnet-4-6**（对话）+ **claude-haiku-4-5**（分类） | 用最新模型字符串，Sonnet负责对话质量，Haiku负责高频低成本任务 |
+| 6 | Demo执行顺序调整：**对话功能提到Day 1** | 对话是整个demo的灵魂，放Day 2风险太大。先跑通核心亮点，地图动效往后排 |
+
+---
+
+## 0. 开始前：准备清单
+
+### 0.1 必须有的 API Keys
+
+| 工具 | 用途 | 获取地址 | 费用 |
+|------|------|---------|------|
+| **Anthropic API Key** | 对话查询 + 事件分类 | https://console.anthropic.com | demo级别 <$2 |
+| **Mapbox Access Token** | 地图渲染+热力图 | https://account.mapbox.com | 免费50k次/月 |
+| **Reddit API** (Client ID + Secret) | 真实本地舆情数据 | https://www.reddit.com/prefs/apps （选 "script" 类型） | 免费 |
+| **v0.dev 账号** | 前端UI生成 | https://v0.dev | 免费tier够用 |
+
+### 0.2 必须装的工具
+
+```bash
+node --version        # 需要 v18+
+npm --version         # 需要 v9+
+git --version
+
+# Claude Code
+npm install -g @anthropic-ai/claude-code
+
+# Vercel CLI
+npm install -g vercel
+```
+
+### 0.3 目标目录结构
+
+```
+pulsecity/
+├── CLAUDE.md                 # ⭐ v2新增：项目上下文，Claude Code的"记忆"
+├── app/
+│   ├── page.tsx
+│   ├── layout.tsx
+│   └── api/
+│       ├── chat/route.ts     # 对话查询（Tool Use + 流式）
+│       ├── events/route.ts   # 事件数据
+│       └── reddit/route.ts   # Reddit拉取 + Haiku分类
+├── components/
+│   ├── MapView.tsx
+│   ├── EventFeed.tsx
+│   ├── ChatPanel.tsx         # 支持流式渲染 + 工具调用状态展示
+│   ├── EventDetailDrawer.tsx
+│   ├── PredictionCard.tsx
+│   └── ToolCallIndicator.tsx # ⭐ v2新增：展示"AI正在查询..."
+├── lib/
+│   ├── mock-data.ts
+│   ├── city-tools.ts         # ⭐ v2新增：Claude可调用的城市数据工具
+│   ├── reddit-client.ts
+│   ├── classify-events.ts    # ⭐ v2新增：Haiku事件分类
+│   ├── geo-utils.ts
+│   ├── prediction-engine.ts
+│   └── types.ts
+├── .env.local
+└── package.json
+```
+
+---
+
+## 1. 第一步：创建 CLAUDE.md（5分钟，回报率最高的一步）
+
+初始化项目目录后，**先做这件事再开始任何编码**。在项目根目录创建 `CLAUDE.md`：
+
+```markdown
+# PulseCity — Project Context
+
+## What this is
+A high-fidelity demo of a real-time city intelligence platform for Seattle, WA.
+Core loop: multi-source local events → AI structuring → POI linking → 
+conversational city queries → map visualization.
+
+## Tech stack
+- Next.js 14 (App Router), TypeScript strict mode, Tailwind CSS
+- Mapbox GL JS via react-map-gl (dark-v11 style, centered on Seattle)
+- Anthropic API: claude-sonnet-4-6 for chat (with tool use + streaming),
+  claude-haiku-4-5 for event classification
+- SWR for data fetching, Zustand if global state is needed
+- Mock data + live Reddit data (r/Seattle, r/SeattleWA)
+
+## Architecture rules
+- All Anthropic API calls happen server-side only (app/api routes)
+- The chat API uses TOOL USE: Claude calls search_events / query_poi / 
+  get_predictions tools defined in lib/city-tools.ts. Never inject the full
+  event database into the system prompt.
+- Chat responses stream via Server-Sent Events
+- All types live in lib/types.ts — no `any`, no inline type definitions
+- All coordinates are real Seattle coordinates (lat ~47.6, lng ~-122.3)
+- Reddit fetch failures must silently fall back to mock data — the demo
+  must never show an error state from a flaky external API
+
+## Design system
+- Dark theme: bg #0a0a0f, surface #12131a, border #1e2030
+- Category colors: Safety #ef4444, Events #3b82f6, Traffic #f59e0b, Civic #22c55e
+- Predicted events: dashed border, PREDICTED badge, confidence %
+- Font: Inter. Flat design, no gradients.
+
+## Demo priorities (in order)
+1. Conversational city query with visible tool calls — the wow moment
+2. Map with pulsing event bubbles + chat-to-map POI highlighting
+3. Event feed with predicted events
+4. Everything else is polish
+```
+
+之后 Claude Code 的每一个 prompt 都会自动读取这份文件，你不需要再重复解释项目背景。
+
+---
+
+## 2. 第二步：v0.dev 生成前端框架
+
+> v0 的 prompt 与 v1 基本一致，但**新增了一个组件**：工具调用指示器。
+
+### 2.1 主布局（同v1，可直接复用）
+
+**【v0 Prompt 1 — 主布局】**
+
+```
+Build a dark-themed city intelligence dashboard called "PulseCity" for a local events monitoring app targeting California and Washington state users.
+
+Layout: Full-screen split layout
+- Left panel (60%): Interactive map area with a dark basemap placeholder (dark gray #0f1117 background with subtle grid lines). Show 5-6 circular event bubbles on the map with pulsing ring animations. Each bubble has a color (red=Safety, blue=Events, amber=Traffic, green=Civic) and shows a number inside. Below the map, show a thin "City Heat Index" bar with 3 neighborhood names and their heat scores (0-100).
+- Right panel (40%):
+  - Top section "Live Events" (50% height): Scrollable list of 5 event cards. Each card shows: category icon, event title, distance badge (e.g. "0.3mi"), time ago, credibility score as small dots, and a "→" action arrow. Predicted future events have a dashed border and clock icon.
+  - Bottom section "Ask the City" (50% height): Chat interface. Shows 2 example conversation turns (user bubble right-aligned in blue, AI response left-aligned in dark surface). Input box at bottom with send button.
+
+Top navbar: Logo "PulseCity" with a pulse icon, city selector dropdown showing "Seattle, WA", a "Live" indicator with pulsing red dot, notification bell, user avatar.
+
+Design language:
+- Background: #0a0a0f, surface cards #12131a with 1px border #1e2030
+- Accent blue #3b82f6, text primary #e8eaf0, secondary #6b7280
+- Category colors: red #ef4444, blue #3b82f6, amber #f59e0b, green #22c55e
+- Font: Inter. Flat design, no gradients.
+
+Make it feel like Bloomberg Terminal meets Citizen App — live and data-dense but readable.
+Use React with Tailwind CSS, realistic placeholder data.
+```
+
+### 2.2 事件详情弹窗（同v1）
+
+**【v0 Prompt 2 — 事件详情弹窗】**
+
+```
+Add an event detail drawer that slides in from the right when clicking an event card.
+
+Contents:
+1. Header: Category badge (colored pill), event title (18px bold), X close button
+2. "Source Confidence" section: percentage bar (e.g. 94%) and source pills below ("Reddit", "311 API", "Seattle Times")
+3. Small dark map thumbnail placeholder with a colored circle overlay
+4. Two metric cards side by side: "Impact Radius" (600m) and "Heat Score" (87/100 with trend arrow)
+5. Timeline: 3 entries with timestamps showing how the event evolved
+6. Bottom action strip: "Navigate Around", "Find Nearby", "Share Alert" buttons with icons
+
+Same dark design system. Semi-transparent backdrop.
+```
+
+### 2.3 ⭐ 工具调用指示器（v2新增，demo核心视觉）
+
+**【v0 Prompt 3 — Tool Call Indicator】**
+
+```
+Create a "ToolCallIndicator" component for an AI chat interface. When the AI is querying data, this appears inline in the chat as a compact status line that updates through stages.
+
+Design:
+- A slim horizontal pill inside the chat area, dark surface (#12131a), subtle border
+- Left: small animated radar/scan icon (rotating or pulsing)
+- Text shows the current tool being called, cycling through states like:
+  "Searching active events near Capitol Hill..." → 
+  "Querying POI database..." → 
+  "Checking prediction models..."
+- Each completed step collapses into a tiny checkmark + label row above the current one
+- When all done, the whole thing collapses into a single muted line: 
+  "✓ Queried 3 data sources" that stays above the AI's answer
+- Use a monospace font for the tool names to make it feel technical
+- Subtle blue glow on the active line
+
+This should make users feel the AI is genuinely querying a live city database.
+```
+
+### 2.4 预测卡片 + 聊天增强（同v1的Prompt 3和4，直接复用）
+
+### 2.5 导出
+
+v0 界面右上角 **"..."** → **"Export"** → **Next.js**，解压到 `pulsecity/` 目录。
+
+---
+
+## 3. 第三步：Claude Code 实施
+
+```bash
+cd pulsecity
+claude
+```
+
+### 3.1 项目初始化
+
+**【Claude Code Prompt 1 — 初始化】**
+
+```
+Read CLAUDE.md first.
+
+Initialize the project:
+1. Set up Next.js 14 with TypeScript + Tailwind in the current directory if not already done
+2. Install: mapbox-gl @types/mapbox-gl react-map-gl swr zustand date-fns lucide-react @anthropic-ai/sdk
+3. Create .env.local with placeholder keys:
+   NEXT_PUBLIC_MAPBOX_TOKEN=
+   ANTHROPIC_API_KEY=
+   REDDIT_CLIENT_ID=
+   REDDIT_CLIENT_SECRET=
+4. Create the directory structure described in CLAUDE.md
+5. Add 'mapbox-gl/dist/mapbox-gl.css' import to app/layout.tsx
+6. Create .env.example mirroring .env.local
+
+Show me the final structure when done.
+```
+
+### 3.2 类型 + Mock数据
+
+**【Claude Code Prompt 2 — 类型与数据】**
+
+```
+Read CLAUDE.md. Create lib/types.ts and lib/mock-data.ts.
+
+types.ts — strict types, no any:
+- EventCategory: 'Safety' | 'Traffic' | 'Hazard' | 'Events' | 'Business' | 'Civic' | 'Community'
+- EventSeverity: 'low' | 'medium' | 'high' | 'critical'
+- EventSource: { platform: string; url: string; credibility: number; timestamp: string }
+- POI: { id, name, address, lat, lng, category, neighborhood, dynamic?: { activeEvents: string[]; heatScore: number; trend: 'rising'|'stable'|'cooling'; lastEventAt: string } }
+- CityEvent: { id, title, summary, category, severity, sources, pois, lat, lng, impactRadiusMeters, heatScore, trend, createdAt, expiresAt, status: 'ongoing'|'resolved'|'predicted', predictedPeakAt?, confidence?, predictionReason?, actionLinks? }
+- ChatMessage: { id, role: 'user'|'assistant', content, timestamp, referencedPois?: POI[] }
+- CityStats: { neighborhood, heatScore, trend, activeEvents }
+- ToolCallStatus: { tool: string; label: string; status: 'running'|'done' }   ← for the UI indicator
+
+mock-data.ts:
+1. SEATTLE_POIS: 30 POIs across Capitol Hill, Downtown, SLU, Fremont, Ballard, Pioneer Square. Realistic venue names, REAL Seattle coordinates.
+2. SEATTLE_EVENTS: 12 CityEvents — 3 Safety (1 critical fire), 3 Traffic (1 predicted I-5 slowdown post-Seahawks game), 3 Events (Capitol Hill Block Party ongoing), 2 Civic, 1 Business. 3 of them status 'predicted' with confidence + predictionReason. createdAt within last 2 hours, real ISO timestamps, realistic heat scores.
+3. CITY_STATS: 6 neighborhoods with heat scores.
+```
+
+### 3.3 ⭐ 城市数据工具层（v2架构核心）
+
+**【Claude Code Prompt 3 — City Tools】**
+
+```
+Read CLAUDE.md. Create lib/city-tools.ts — the tool layer that Claude calls during chat.
+
+Define both the tool SCHEMAS (Anthropic tool format) and the EXECUTORS:
+
+Tool 1 — search_events
+  description: "Search currently active and predicted events in the city. Use this whenever the user asks what's happening, about safety, traffic, or any specific area."
+  input_schema: { category?: EventCategory, neighborhood?: string, near?: {lat, lng}, radius_miles?: number, include_predicted?: boolean, max_results?: number }
+  executor: filters SEATTLE_EVENTS (+ live events passed in), computes distances with haversine, returns compact JSON (id, title, category, severity, distance, heatScore, status, predictedPeakAt) — NOT full objects, keep token use low.
+
+Tool 2 — query_poi
+  description: "Look up places (restaurants, venues, parks, landmarks) from the POI database. Use for any recommendation or 'where is' question."
+  input_schema: { query?: string, category?: string, neighborhood?: string, near?: {lat,lng}, exclude_near_events?: boolean, max_results?: number }
+  executor: searches SEATTLE_POIS by fuzzy name/category match. If exclude_near_events is true, filter out POIs within 0.3mi of any active high-severity event — this powers the killer demo query "find me dinner away from the chaos".
+
+Tool 3 — get_predictions
+  description: "Get AI predictions about what will happen in the next few hours: traffic surges, crowd buildups, event peaks."
+  input_schema: { hours_ahead?: number, category?: EventCategory }
+  executor: returns the predicted-status events plus output from lib/prediction-engine.ts.
+
+Tool 4 — get_area_status
+  description: "Get the overall pulse of a neighborhood: heat score, trend, active event count."
+  input_schema: { neighborhood: string }
+  executor: looks up CITY_STATS + counts events in that neighborhood.
+
+Export: CITY_TOOLS (array of tool schemas) and executeTool(name, input): Promise<string> that routes to the right executor and returns JSON string. Also export TOOL_LABELS: a map from tool name to human-readable label like "Searching active events..." for the UI indicator.
+```
+
+### 3.4 ⭐ 对话API：Tool Use + 流式（整个项目最重要的文件）
+
+**【Claude Code Prompt 4 — Chat API】**
+
+```
+Read CLAUDE.md. Create app/api/chat/route.ts — the conversational city query API.
+
+Architecture: Claude with TOOL USE in an agentic loop, streamed to the client via Server-Sent Events.
+
+1. POST handler accepts: { messages: ChatMessage[], location?: {lat, lng} }
+
+2. System prompt (keep it SHORT now that tools carry the data):
+   - "You are PulseCity's AI city guide for Seattle. You have live access to the city's event feed, POI database, and prediction engine through your tools. ALWAYS use tools to answer — never guess about current events."
+   - Current timestamp + day of week
+   - Personality rules: have opinions, lead with the most important thing, give ONE specific recommendation not a list, use natural distance language ("3 blocks north"), under 100 words, end with one "→" action suggestion when relevant
+   - When mentioning a specific POI from query_poi results, wrap it as <poi id="POI_ID">Name</poi>
+   - For predictions, phrase as "I'm tracking..." or "Based on the patterns I'm seeing..."
+
+3. Agentic loop with the Anthropic SDK:
+   - model: 'claude-sonnet-4-6', max_tokens: 600, tools: CITY_TOOLS
+   - While the response has stop_reason 'tool_use': execute each tool call via executeTool(), append tool_result blocks, call the API again. Cap at 5 iterations.
+   - For each tool call, immediately emit an SSE event: { type: 'tool_call', tool, label } and on completion { type: 'tool_done', tool }
+   - For the final text response, use streaming and emit { type: 'text_delta', text } chunks as they arrive
+   - End with { type: 'done', referencedPois: POI[] } — parse <poi> tags from the full text and resolve them against SEATTLE_POIS
+
+4. SSE format: standard 'data: {json}\n\n' lines, Content-Type text/event-stream, no caching.
+
+5. Error handling: any API failure emits { type: 'error', message } — never crash the stream.
+
+Also create lib/chat-client.ts: a client-side function streamCityChat(messages, location, callbacks) using fetch + ReadableStream parsing, with callbacks: onToolCall, onToolDone, onTextDelta, onDone, onError.
+```
+
+### 3.5 ⭐ Reddit + Haiku事件分类
+
+**【Claude Code Prompt 5 — Reddit与AI分类】**
+
+```
+Read CLAUDE.md. Create lib/reddit-client.ts, lib/classify-events.ts, and app/api/reddit/route.ts.
+
+reddit-client.ts:
+- OAuth2 client_credentials flow, token cached in memory with expiry
+- fetchLocalPosts(subreddits: string[], limit): hot posts from r/Seattle, r/SeattleWA
+- Exponential backoff on rate limits. All errors return [] silently (demo must never break).
+
+classify-events.ts — AI classification replacing keyword matching:
+- classifyPosts(posts: RedditPost[]): Promise<CityEvent[]>
+- ONE batched call to claude-haiku-4-5 (not one call per post): send up to 15 post titles+snippets, ask for a JSON array back.
+- For each post the model returns: { is_local_event: boolean, category, severity, title (cleaned up), summary (one sentence), location_mention: string | null, confidence: number }
+- Prompt the model to respond ONLY with the JSON array, no prose. Strip ```json fences before parsing. Discard items with is_local_event false or confidence < 0.6.
+- Map location_mention to coordinates using a lookup table of ~25 common Seattle place names → real lat/lng. If no match, drop the event (better to miss than to misplace a pin).
+- Build CityEvent objects with source platform 'Reddit', credibility 0.65, heatScore derived from post score (upvotes), expiresAt = createdAt + 12h.
+
+app/api/reddit/route.ts:
+- GET: fetch posts → classify → merge with SEATTLE_EVENTS (mock first)
+- 3s timeout on the whole Reddit pipeline; on timeout return mock only
+- Cache 5 minutes (Next.js revalidate)
+```
+
+### 3.6 Events API + 地理工具
+
+**【Claude Code Prompt 6 — Events API】**
+
+```
+Read CLAUDE.md. Create app/api/events/route.ts and lib/geo-utils.ts.
+
+geo-utils.ts: haversineDistance (miles), isWithinRadius, getBoundingBox.
+
+events route:
+- GET with params: ?category=all&lat=&lng=&radius_miles=
+- Source: call the /api/reddit pipeline internally (which already merges mock + live)
+- Filter: non-expired only, optional category and radius filters
+- Sort: ongoing by heatScore desc, then predicted events
+- Add computed distanceMiles when lat/lng provided
+- stale-while-revalidate 60s
+```
+
+### 3.7 预测引擎（同v1 Prompt 9，复用）
+
+**【Claude Code Prompt 7 — 预测引擎】**
+
+```
+Read CLAUDE.md. Create lib/prediction-engine.ts:
+
+1. getPredictionsForTime(currentHour): returns 2-3 CityEvents with status 'predicted' — game-day traffic and nightlife crowding for evening hours (17-22), lunch crowds and afternoon events otherwise. Each has confidence 60-92%, predictedPeakAt, and a predictionReason that reads like real analysis ("3 years of game-day patterns + current I-5 sensor signals").
+
+2. getAnomalyAlerts(): 2 mock anomaly detections phrased as AI discoveries:
+   - "Unusual Yelp review velocity at Pike Place Market — 340% above baseline. Possible undisclosed event."
+   - "Reddit post cluster in Pioneer Square matches historical pre-gathering patterns (87% similarity)."
+
+3. getCityPulseScore(): overall 0-100 score with component breakdown for a navbar widget.
+```
+
+---
+
+## 4. 第四步：组件整合
+
+### 4.1 整合v0组件 + 接通数据
+
+**【Claude Code Prompt 8 — 组件整合】**
+
+```
+Read CLAUDE.md. The components/ directory has v0-generated components with hardcoded data. Wire them to real data:
+
+1. MapView:
+   - Mapbox GL, style 'mapbox://styles/mapbox/dark-v11', center [-122.3321, 47.6062], zoom 12, 'use client'
+   - Fetch /api/events, render custom markers: colored circle + CSS pulsing ring (critical events pulse at 1s, others 2.5s)
+   - Props: onEventSelect(event), selectedEvent (draws impact radius circle at 15% fill opacity), highlightedPois (adds glowing ring to those markers + flyTo the first one)
+   - Heatmap layer from event coords weighted by heatScore
+
+2. EventFeed:
+   - SWR on /api/events, 30s refresh, loading skeletons
+   - Predicted events get dashed border + PREDICTED badge + confidence
+   - onEventSelect on click; "Live" pulsing dot in header
+
+3. ChatPanel — the centerpiece:
+   - Local messages state; on send, call streamCityChat from lib/chat-client.ts
+   - onToolCall → append/update a ToolCallIndicator block in the message list showing the running tool label
+   - onToolDone → mark that step with a checkmark; when final answer starts, collapse indicator to "✓ Queried N data sources"
+   - onTextDelta → append streamed text to the assistant bubble in real time
+   - onDone → emit onPoisHighlight(referencedPois) to parent; render <poi> tags inside the bubble as tappable highlighted chips that also trigger the map highlight
+   - Suggestion chips fill the input on tap
+
+4. app/page.tsx: compose all three + EventDetailDrawer. State: selectedEvent, highlightedPois. Wire all callbacks.
+```
+
+### 4.2 动效 + 响应式（同v1 Prompt 10和11，直接复用）
+
+**【Claude Code Prompt 9 — 动效】** 用v1手册的Prompt 10原文。
+
+**【Claude Code Prompt 10 — 响应式】** 用v1手册的Prompt 11原文。
+
+### 4.3 实时模拟（同v1 Prompt 13，复用）
+
+**【Claude Code Prompt 11 — 实时模拟】** 用v1手册的Prompt 13原文（useRealtimeEvents / useCityPulse / useBreakingAlert 三个hook）。
+
+---
+
+## 5. 第五步：测试与部署
+
+### 5.1 本地验证
+
+**【Claude Code Prompt 12 — 构建检查】**
+
+```
+Read CLAUDE.md. Run `npm run build` and fix all errors. Then verify:
+1. mapbox-gl CSS is imported in layout.tsx
+2. All map components have 'use client'
+3. ANTHROPIC_API_KEY and REDDIT_* are never referenced in client components
+4. The chat SSE stream works: write a quick test that POSTs to /api/chat and logs the event types received
+5. /api/events returns mock data even when Reddit credentials are empty
+
+Fix anything broken and summarize what you changed.
+```
+
+### 5.2 Vercel部署
+
+```bash
+vercel
+# 部署后在 Vercel Dashboard → Settings → Environment Variables 填入所有key
+```
+
+**【Claude Code Prompt 13 — 部署配置】**
+
+```
+Read CLAUDE.md. Prepare for Vercel:
+1. vercel.json: maxDuration 60s for /api/chat (tool-use loops need time), CORS headers on /api/*
+2. next.config.js: transpilePackages ['mapbox-gl'], security headers
+3. README.md: description, env vars table, 5-step setup
+4. Confirm `npm run build` passes
+```
+
+---
+
+## 6. Demo 演示脚本 v2
+
+### 黄金路径（按这个顺序，5分钟打动任何人）
+
+**第1幕 — 开场（30秒）**
+打开App：地图脉冲气泡 + 右上角Live红点。
+一句话："你现在看到的是西雅图此刻正在发生的一切。"
+
+**第2幕 — 对话查询（核心，2.5分钟）**
+
+问题按这个顺序，每一问展示一个能力层：
+
+```
+Q1（基础感知）: "What's happening near Capitol Hill right now?"
+→ 观众看到 ToolCallIndicator 滚动："Searching active events..." 
+→ 这一刻就是科技感的来源：AI在真的查数据库，不是在背答案
+
+Q2（杀手锏）: "Find me somewhere to eat that's NOT near any of the chaos"
+→ 这一问展示 exclude_near_events 逻辑 — 竞品全都做不到
+→ 回答里的POI chip是可点的，点一下地图飞过去并高亮
+
+Q3（预测能力）: "What's going to happen on I-5 north after the game tonight?"
+→ "I'm tracking a predicted slowdown... 82% confidence based on..."
+→ 强调：这是预测，不是播报
+```
+
+**第3幕 — 地图联动（1分钟）**
+点击Q2回答里的POI chip → 地图flyTo + 发光高亮。
+再点一个Safety事件气泡 → 详情抽屉：多源验证、可信度94%、事件时间线。
+
+**第4幕 — 收尾（30秒）**
+指着异常发现卡片："这条事件没有任何媒体报道过，是系统自己从数据模式里发现的。"
+一句定位："Google Maps告诉你东西在哪，我们告诉你正在发生什么、以及接下来会发生什么。"
+
+---
+
+## 7. 排错速查
+
+| 问题 | 解决 |
+|------|------|
+| 地图空白 | 检查token + layout.tsx里的mapbox CSS import + 容器有明确height |
+| SSE流中断 | Vercel maxDuration设60s；本地dev正常说明就是超时问题 |
+| 工具循环不停止 | 确认loop有5次上限；检查tool_result的tool_use_id是否正确对应 |
+| Haiku分类返回非JSON | prompt里强调"ONLY JSON array"；解析前strip掉```json围栏 |
+| Reddit 401 | app类型必须选"script"；credentials用Basic Auth编码 |
+| POI chip点击地图没反应 | 检查referencedPois的id是否能在SEATTLE_POIS中匹配到 |
+
+---
+
+## 8. 时间分配 v2（对话功能前置）
+
+| 时段 | 任务 | 产出 |
+|------|------|------|
+| Day 1 上午 | CLAUDE.md + 初始化 + 类型/Mock数据 + city-tools | 数据层完整 |
+| Day 1 下午 | **Chat API（Tool Use + 流式）+ ChatPanel接通** | 核心亮点能跑 |
+| Day 2 上午 | v0组件整合 + 地图 + Feed + 地图联动 | 三屏联动完整 |
+| Day 2 下午 | Reddit/Haiku分类 + 动效 + 实时模拟 + 部署 | 可分享链接 |
+
+> 如果时间只够一天：砍掉Reddit真实数据（纯mock也完全够demo用）、砍掉响应式（只做桌面端）。对话+地图联动绝对不能砍。
+
+---
+
+*手册 v2 结束*

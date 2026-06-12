@@ -1,12 +1,14 @@
 /**
- * AC-4: Test the /api/chat SSE streaming endpoint.
+ * AC-4 + AC-3: Test the /api/chat SSE streaming endpoint.
  *
- * Starts `npm run dev` in the background, fires two chat queries, validates
- * SSE event streams, then kills the dev server.
+ * Test 1: Capitol Hill query — tool calls + text stream
+ * Test 2: Dinner away from chaos — referencedPois non-empty
+ * Test 3 (AC-3): referencedPois entries have lat/lng matching SEATTLE_POIS
  */
 
 import { spawn } from 'child_process';
 import { setTimeout as sleep } from 'timers/promises';
+import { SEATTLE_POIS, SEATTLE_BOUNDS } from './poi-data.mjs';
 
 const BASE_URL = 'http://localhost:3000';
 
@@ -38,7 +40,7 @@ async function waitForServer(maxMs = 60_000) {
   while (Date.now() < deadline) {
     try {
       const r = await fetch(BASE_URL, { signal: AbortSignal.timeout(2000) });
-      if (r.status < 500) return; // any non-server-error means it's up
+      if (r.status < 500) return;
     } catch (e) {
       lastErr = e.message;
     }
@@ -91,10 +93,10 @@ function assert(condition, message) {
 
 let devServer;
 let exitCode = 0;
-const results = { test1: null, test2: null };
+const results = { test1: null, test2: null, test3: null };
 
 try {
-  console.log('\n=== AC-4: Chat API SSE Test ===\n');
+  console.log('\n=== Chat API SSE Test (AC-3 + AC-4) ===\n');
 
   devServer = await startDevServer();
   console.log('Waiting for dev server to be ready (up to 60s)...');
@@ -113,9 +115,9 @@ try {
   console.log(`  Received ${events1.length} SSE events`);
   console.log('  Types:', events1.map(e => e.type).join(', '));
 
-  const toolCalls1  = events1.filter(e => e.type === 'tool_call');
-  const textDeltas1 = events1.filter(e => e.type === 'text_delta');
-  const doneEvents1 = events1.filter(e => e.type === 'done');
+  const toolCalls1   = events1.filter(e => e.type === 'tool_call');
+  const textDeltas1  = events1.filter(e => e.type === 'text_delta');
+  const doneEvents1  = events1.filter(e => e.type === 'done');
   const errorEvents1 = events1.filter(e => e.type === 'error');
 
   if (errorEvents1.length > 0) console.error('  Errors:', JSON.stringify(errorEvents1));
@@ -139,7 +141,7 @@ try {
   console.log(`  Received ${events2.length} SSE events`);
   console.log('  Types:', events2.map(e => e.type).join(', '));
 
-  const doneEvent2  = events2.find(e => e.type === 'done');
+  const doneEvent2   = events2.find(e => e.type === 'done');
   const errorEvents2 = events2.filter(e => e.type === 'error');
 
   if (errorEvents2.length > 0) console.error('  Errors:', JSON.stringify(errorEvents2));
@@ -154,7 +156,44 @@ try {
   results.test2 = 'PASSED';
   console.log('\nTest 2 PASSED\n');
 
-  console.log('=== All AC-4 tests PASSED ===');
+  // ── Test 3 (AC-3): referencedPois lat/lng match SEATTLE_POIS ───────────────
+  console.log('Test 3 (AC-3): referencedPois entries have lat/lng matching SEATTLE_POIS');
+  const poiLookup = new Map(SEATTLE_POIS.map(p => [p.id, p]));
+
+  for (const poi of referencedPois) {
+    assert(typeof poi.id === 'string' && poi.id.startsWith('poi-'), `POI has valid id (got: ${poi.id})`);
+    assert(typeof poi.lat === 'number', `POI "${poi.name}" has numeric lat (got: ${typeof poi.lat})`);
+    assert(typeof poi.lng === 'number', `POI "${poi.name}" has numeric lng (got: ${typeof poi.lng})`);
+
+    // Lat/lng must be within Seattle bounding box
+    assert(
+      poi.lat >= SEATTLE_BOUNDS.minLat && poi.lat <= SEATTLE_BOUNDS.maxLat,
+      `POI "${poi.name}" lat ${poi.lat} is within Seattle bounds [${SEATTLE_BOUNDS.minLat}, ${SEATTLE_BOUNDS.maxLat}]`,
+    );
+    assert(
+      poi.lng >= SEATTLE_BOUNDS.minLng && poi.lng <= SEATTLE_BOUNDS.maxLng,
+      `POI "${poi.name}" lng ${poi.lng} is within Seattle bounds [${SEATTLE_BOUNDS.minLng}, ${SEATTLE_BOUNDS.maxLng}]`,
+    );
+
+    // Cross-reference: lat/lng must match the entry in SEATTLE_POIS by id
+    const canonical = poiLookup.get(poi.id);
+    assert(canonical !== undefined, `POI id "${poi.id}" exists in SEATTLE_POIS`);
+    if (canonical) {
+      assert(
+        Math.abs(poi.lat - canonical.lat) < 0.0001,
+        `POI "${poi.name}" lat matches SEATTLE_POIS (expected ${canonical.lat}, got ${poi.lat})`,
+      );
+      assert(
+        Math.abs(poi.lng - canonical.lng) < 0.0001,
+        `POI "${poi.name}" lng matches SEATTLE_POIS (expected ${canonical.lng}, got ${poi.lng})`,
+      );
+    }
+  }
+
+  results.test3 = 'PASSED';
+  console.log('\nTest 3 PASSED\n');
+
+  console.log('=== All tests PASSED ===');
   console.log(JSON.stringify(results));
 
 } catch (err) {

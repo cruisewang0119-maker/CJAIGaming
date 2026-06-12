@@ -129,3 +129,17 @@ export type ToolInput =
   | QueryPoiInput
   | GetPredictionsInput
   | GetAreaStatusInput;
+
+export interface CityEventWithDistance extends CityEvent {
+  distanceMiles?: number;
+}
+
+export interface LocalMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  referencedPois?: POI[];
+  toolCalls?: Array<{ tool: string; label: string; done: boolean }>;
+  isStreaming?: boolean;
+}
